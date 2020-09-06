@@ -135,7 +135,7 @@ export function makeSideShiftPlugin(
   async function callApi(json: any, method: string, url: string) {
     const body = JSON.stringify(json)
     const header = 'Content-Type: application/json'
-    const response = await fetchCors(url, { method, body, header })
+    const response = await fetchCors(url, { method, body, header }) // TODO: use fetch or fetchCors?
     if (!response.ok) {
       throw new Error(`SideShift.ai returned error code ${response.status}`)
     }
@@ -144,11 +144,13 @@ export function makeSideShiftPlugin(
 
   const out: EdgeSwapPlugin = {
     swapInfo,
+
     async fetchSwapQuote(
       request: EdgeSwapRequest,
       userSettings: Object | void,
       opts: { promoCode?: string }
     ): Promise<EdgeSwapQuote> {
+      // const { promoCode } = opts //TODO: do we need promoCode?
       if (
         // if either currencyCode is invalid *and* doesn't have a transcription
         INVALID_CURRENCY_CODES[request.fromCurrencyCode] ||
@@ -160,25 +162,7 @@ export function makeSideShiftPlugin(
           request.toCurrencyCode
         )
       }
-      const fixedPromise = this.getFixedQuote(request, userSettings, opts)
-      // const estimatePromise = this.getEstimate(request, userSettings, opts)
-      try {
-        const fixedResult = await fixedPromise
-        return fixedResult
-      } catch (e) {
-        // TODO: genuinely confused why estimateResult is in the catch block
-        // const estimateResult = await estimatePromise
-        // return estimateResult
-        return e
-      }
-    },
 
-    async getFixedQuote(
-      request: EdgeSwapRequest,
-      userSettings: Object | void,
-      opts: { promoCode?: string }
-    ): Promise<EdgeSwapQuote> {
-      // const { promoCode } = opts //TODO: do we need promoCode?
       const [depositAddress, settleAddress] = await Promise.all([
         getAddress(request.fromWallet, request.fromCurrencyCode),
         getAddress(request.toWallet, request.toCurrencyCode)
@@ -204,12 +188,12 @@ export function makeSideShiftPlugin(
       if (CURRENCY_CODE_TRANSCRIPTION[request.toCurrencyCode]) {
         safeToCurrencyCode = CURRENCY_CODE_TRANSCRIPTION[
           request.toCurrencyCode
-        ].toLowerCase()
+        ].toLowerCase() // TODO: does the api always expect lower case deposit and settle methods?
       }
 
       const fixedRateQuoteParams: FixedQuoteRequestParams = {
-        depositMethod: safeFromCurrencyCode.toLowerCase(), // TODO: does the api always expect lower case deposit and settle methods?
-        settlMethod: safeToCurrencyCode.toLowerCase(),
+        depositMethod: safeFromCurrencyCode,
+        settlMethod: safeToCurrencyCode,
         depositAmount: quoteAmount
       }
 
@@ -220,9 +204,9 @@ export function makeSideShiftPlugin(
       )
 
       const rateUrl =
-        request.quoteFor === 'from'
-          ? baseUrl + `pairs/${safeFromCurrencyCode}/${safeToCurrencyCode}`
-          : baseUrl + `pairs/${safeToCurrencyCode}/${safeFromCurrencyCode}`
+        baseUrl + request.quoteFor === 'from'
+          ? `pairs/${safeFromCurrencyCode}/${safeToCurrencyCode}`
+          : `pairs/${safeToCurrencyCode}/${safeFromCurrencyCode}`
 
       const rate: Rate = await callApi(null, 'GET', rateUrl)
 
@@ -285,7 +269,7 @@ export function makeSideShiftPlugin(
         networkFeeOption:
           request.fromCurrencyCode.toUpperCase() === 'BTC'
             ? 'high'
-            : 'standard', // TODO: figure out if this is specific to Edge
+            : 'standard', // TODO: figure out if this is specific to Edge, other plugins have the same
         swapData: {
           orderId: quoteInfo.orderId,
           isEstimate: false,
