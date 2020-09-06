@@ -126,7 +126,7 @@ export function makeSideShiftPlugin(
   const { apiKey, secret } = initOptions
   const baseUrl = 'https://sideshift.ai/api/'
 
-  // TODO: where do we provide a secret and apiKey?
+  // TODO: apiKey and secret are provided in edge-react-gui env.json if needed
   if (apiKey == null || secret == null) {
     throw new Error('No SideShift.ai apiKey or secret provided.')
   }
