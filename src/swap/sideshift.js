@@ -1,5 +1,7 @@
 // @flow
 
+import { gt, lt } from 'biggystring'
+import { SwapAboveLimitError, SwapBelowLimitError } from 'edge-core-js'
 import {
   type EdgeCorePluginOptions,
   type EdgeCurrencyWallet,
@@ -11,9 +13,6 @@ import {
   type EdgeTransaction,
   SwapCurrencyError
 } from 'edge-core-js/types'
-import hashjs from 'hash.js'
-import { base16 } from 'rfc4648'
-import utf8Codec from 'utf8'
 
 import { makeSwapPluginQuote } from '../swap-helpers.js'
 
@@ -21,25 +20,10 @@ const INVALID_CURRENCY_CODES = {}
 
 // Invalid currency codes should *not* have transcribed codes
 // because currency codes with transcribed versions are NOT invalid
+// TODO: figure out what's this
 const CURRENCY_CODE_TRANSCRIPTION = {
   // Edge currencyCode: exchangeCurrencyCode
   USDT: 'USDT20'
-}
-
-function hmacSha512(data: Uint8Array, key: Uint8Array): Uint8Array {
-  const hmac = hashjs.hmac(hashjs.sha512, key)
-  return hmac.update(data).digest()
-}
-
-function parseUtf8(text: string): Uint8Array {
-  const byteString: string = utf8Codec.encode(text)
-  const out = new Uint8Array(byteString.length)
-
-  for (let i = 0; i < byteString.length; ++i) {
-    out[i] = byteString.charCodeAt(i)
-  }
-
-  return out
 }
 
 const pluginId = 'sideshift'
@@ -48,7 +32,6 @@ const swapInfo: EdgeSwapInfo = {
   displayName: 'SideShift.ai',
   supportEmail: 'help@sideshift.ai'
 }
-const uri = 'https://sideshift.ai/api'
 type FixedQuote = {
   createdAt: string,
   depositAmount: string,
@@ -58,6 +41,12 @@ type FixedQuote = {
   rate: string,
   settleAmount: string,
   settleMethod: string
+}
+
+type FixedQuoteRequestParams = {
+  depositMethod: string,
+  settlMethod: string,
+  depositAmount: string
 }
 
 type OrderRequest = {
@@ -91,12 +80,17 @@ type OrderRequestParams = {
   settleAddress: string
 }
 
+type Rate = {
+  rate: number,
+  min: string,
+  max: string
+}
+
 const dontUseLegacy = {
   // TODO: clarify with Andreas
   DGB: true
 }
 
-// returns the settleAddress from Edge wallet
 async function getAddress(
   wallet: EdgeCurrencyWallet,
   currencyCode: string
@@ -130,28 +124,18 @@ export function makeSideShiftPlugin(
   const { initOptions, io } = opts
   const { fetchCors = io.fetch } = io
   const { apiKey, secret } = initOptions
+  const baseUrl = 'https://sideshift.ai/api/'
 
+  // TODO: where do we provide a secret and apiKey?
   if (apiKey == null || secret == null) {
     throw new Error('No SideShift.ai apiKey or secret provided.')
   }
-  const parsedSecret = parseUtf8(secret)
 
-  // TODO: replace this function with better code
-  async function call(json: any, promoCode?: string) {
-    // TODO: do we need promocode?
+  // TODO: can't move this outside of makeSideShiftPlugin function because of fetchCors method
+  async function callApi(json: any, method: string, url: string) {
     const body = JSON.stringify(json)
-    const sign = base16
-      .stringify(hmacSha512(parseUtf8(body), parsedSecret))
-      .toLowerCase()
-
-    const headers: { [header: string]: string } = {
-      'Content-Type': 'application/json',
-      'api-key': apiKey,
-      sign
-    }
-    if (promoCode != null) headers['X-Promo-Code'] = promoCode
-    const response = await fetchCors(uri, { method: 'POST', body, headers })
-
+    const header = 'Content-Type: application/json'
+    const response = await fetchCors(url, { method, body, header })
     if (!response.ok) {
       throw new Error(`SideShift.ai returned error code ${response.status}`)
     }
@@ -194,7 +178,7 @@ export function makeSideShiftPlugin(
       userSettings: Object | void,
       opts: { promoCode?: string }
     ): Promise<EdgeSwapQuote> {
-      const { promoCode } = opts
+      // const { promoCode } = opts //TODO: do we need promoCode?
       const [depositAddress, settleAddress] = await Promise.all([
         getAddress(request.fromWallet, request.fromCurrencyCode),
         getAddress(request.toWallet, request.toCurrencyCode)
@@ -213,59 +197,65 @@ export function makeSideShiftPlugin(
       let safeFromCurrencyCode = request.fromCurrencyCode
       let safeToCurrencyCode = request.toCurrencyCode
       if (CURRENCY_CODE_TRANSCRIPTION[request.fromCurrencyCode]) {
-        safeFromCurrencyCode =
-          CURRENCY_CODE_TRANSCRIPTION[request.fromCurrencyCode]
+        safeFromCurrencyCode = CURRENCY_CODE_TRANSCRIPTION[
+          request.fromCurrencyCode
+        ].toLowerCase()
       }
       if (CURRENCY_CODE_TRANSCRIPTION[request.toCurrencyCode]) {
-        safeToCurrencyCode = CURRENCY_CODE_TRANSCRIPTION[request.toCurrencyCode]
+        safeToCurrencyCode = CURRENCY_CODE_TRANSCRIPTION[
+          request.toCurrencyCode
+        ].toLowerCase()
       }
-      const fixedRateQuote: FixedQuote = await call({
-        jsonrpc: '2.0', // TODO: clarify with Andreas
-        method: 'quotes',
-        params: {
-          depositMethod: safeFromCurrencyCode.toLowerCase(), // TODO: does the api always expect lower case deposit and settle methods?
-          settlMethod: safeToCurrencyCode.toLowerCase(),
-          depositAmount: quoteAmount
-        }
-      })
-      // const min =
-      //   request.quoteFor === 'from'
-      //     ? fixedRateQuote.result.minFrom
-      //     : fixedRateQuote.result.minTo
-      // const max =
-      //   request.quoteFor === 'from'
-      //     ? fixedRateQuote.result.maxFrom
-      //     : fixedRateQuote.result.maxTo
-      // const nativeMin = await request.fromWallet.denominationToNative(
-      //   min,
-      //   request.fromCurrencyCode
-      // )
-      // const nativeMax = await request.fromWallet.denominationToNative(
-      //   max,
-      //   request.fromCurrencyCode
-      // )
-      // if (lt(request.nativeAmount, nativeMin)) {
-      //   throw new SwapBelowLimitError(swapInfo, nativeMin) // TODO: figure out if we can ignore throwing these errors
-      // }
-      // if (gt(request.nativeAmount, nativeMax)) {
-      //   throw new SwapAboveLimitError(swapInfo, nativeMax) // TODO: clarify with Andreas if there are upper and lower limits to swap
-      // }
 
-      const params: OrderRequestParams = {
+      const fixedRateQuoteParams: FixedQuoteRequestParams = {
+        depositMethod: safeFromCurrencyCode.toLowerCase(), // TODO: does the api always expect lower case deposit and settle methods?
+        settlMethod: safeToCurrencyCode.toLowerCase(),
+        depositAmount: quoteAmount
+      }
+
+      const fixedRateQuote: FixedQuote = await callApi(
+        fixedRateQuoteParams,
+        'POST',
+        baseUrl
+      )
+
+      const rateUrl =
+        request.quoteFor === 'from'
+          ? baseUrl + `pairs/${safeFromCurrencyCode}/${safeToCurrencyCode}`
+          : baseUrl + `pairs/${safeToCurrencyCode}/${safeFromCurrencyCode}`
+
+      const rate: Rate = await callApi(null, 'GET', rateUrl)
+
+      const nativeMin = await request.fromWallet.denominationToNative(
+        rate.min,
+        request.fromCurrencyCode
+      )
+
+      const nativeMax = await request.fromWallet.denominationToNative(
+        rate.max,
+        request.fromCurrencyCode
+      )
+
+      if (lt(request.nativeAmount, nativeMin)) {
+        throw new SwapBelowLimitError(swapInfo, nativeMin)
+      }
+
+      if (gt(request.nativeAmount, nativeMax)) {
+        throw new SwapAboveLimitError(swapInfo, nativeMax)
+      }
+
+      const orderRequestParams: OrderRequestParams = {
         type: 'fixed',
         quoteId: fixedRateQuote.id,
         affiliateId: 'whatever',
-        sessionSecret: 'this can be empty right?', // TODO
-        settleAddress: settleAddress
+        sessionSecret: 'this can be empty right?', // TODO: clarify with Andreas
+        settleAddress
       }
 
-      const quoteInfo: OrderRequest = await call(
-        {
-          jsonrpc: '2.0',
-          method: 'orders',
-          params
-        },
-        promoCode
+      const quoteInfo: OrderRequest = await callApi(
+        orderRequestParams,
+        'POST',
+        baseUrl
       )
       checkReplyforError(quoteInfo, request)
       const spendInfoAmount = await request.fromWallet.denominationToNative(
@@ -289,7 +279,7 @@ export function makeSideShiftPlugin(
           {
             nativeAmount: spendInfoAmount,
             publicAddress: quoteInfo.settleAddress.address,
-            uniqueIdentifier: quoteInfo.id || undefined // TODO: not sure if this is right
+            uniqueIdentifier: quoteInfo.id || undefined // TODO: not sure if this is right or we need this
           }
         ],
         networkFeeOption:
@@ -317,7 +307,7 @@ export function makeSideShiftPlugin(
         settleAddress,
         'sideshift',
         false,
-        quoteInfo.expiresAt, // TODO: check if ISO or js date object type is needed here
+        quoteInfo.expiresAt,
         quoteInfo.id
       )
     }
