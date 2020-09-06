@@ -1,7 +1,12 @@
 // @flow
 
 import { gt, lt } from 'biggystring'
-import { SwapAboveLimitError, SwapBelowLimitError } from 'edge-core-js'
+import {
+  SwapAboveLimitError,
+  SwapBelowLimitError,
+  SwapPermissionError
+} from 'edge-core-js'
+import { EdgeFetchResponse } from 'edge-core-js/lib/types/types'
 import {
   type EdgeCorePluginOptions,
   type EdgeCurrencyWallet,
@@ -101,20 +106,22 @@ async function getAddress(
     : addressInfo.publicAddress
 }
 
-// TODO: Replace this with better code
-function checkReplyforError(reply: Object, request: EdgeSwapRequest) {
-  if (reply.error != null) {
-    if (
-      reply.error.code === -32602 ||
-      /Invalid currency:/.test(reply.error.message) // TODO: clarify with Andreas how our endpoint throws errors
-    ) {
-      throw new SwapCurrencyError(
-        swapInfo,
-        request.fromCurrencyCode,
-        request.toCurrencyCode
-      )
-    }
-    throw new Error('SideShift.ai error: ' + JSON.stringify(reply.error))
+async function checkReply(uri: string, reply: EdgeFetchResponse) {
+  let replyJson
+  try {
+    replyJson = await reply.json()
+  } catch (e) {
+    // TODO: discuss error handling with Andreas
+    throw new Error(
+      `SideShift.ai returned error code ${reply.status} (no JSON)`
+    )
+  }
+  if (
+    reply.status === 403 &&
+    replyJson != null &&
+    /geo/.test(replyJson.error) // TODO: This could be used for transactions coming from restriced countries
+  ) {
+    throw new SwapPermissionError(swapInfo, 'geoRestriction')
   }
 }
 
@@ -122,7 +129,7 @@ export function makeSideShiftPlugin(
   opts: EdgeCorePluginOptions
 ): EdgeSwapPlugin {
   const { initOptions, io } = opts
-  const { fetchCors = io.fetch } = io
+  const { fetchCors = io.fetch } = io // TODO: use fetch or fetchCors?
   const { apiKey, secret } = initOptions
   const baseUrl = 'https://sideshift.ai/api/'
 
@@ -131,15 +138,23 @@ export function makeSideShiftPlugin(
     throw new Error('No SideShift.ai apiKey or secret provided.')
   }
 
-  // TODO: can't move this outside of makeSideShiftPlugin function because of fetchCors method
-  async function callApi(json: any, method: string, url: string) {
-    const body = JSON.stringify(json)
-    const header = 'Content-Type: application/json'
-    const response = await fetchCors(url, { method, body, header }) // TODO: use fetch or fetchCors?
-    if (!response.ok) {
-      throw new Error(`SideShift.ai returned error code ${response.status}`)
-    }
-    return response.json()
+  async function get(path: string): Promise<Rate> {
+    const url = `${baseUrl}${path}`
+    const reply = await fetchCors(url)
+    return reply
+  }
+
+  async function post(path, body): Promise<any> {
+    const url = `${baseUrl}${path}`
+    const reply = await fetchCors(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json' // TODO: need anything else here?
+      },
+      body: JSON.stringify(body)
+    })
+
+    return checkReply(url, reply)
   }
 
   const out: EdgeSwapPlugin = {
@@ -197,18 +212,17 @@ export function makeSideShiftPlugin(
         depositAmount: quoteAmount
       }
 
-      const fixedRateQuote: FixedQuote = await callApi(
-        fixedRateQuoteParams,
-        'POST',
-        baseUrl
+      const fixedRateQuote: FixedQuote = await post(
+        'quotes',
+        fixedRateQuoteParams
       )
 
-      const rateUrl =
-        baseUrl + request.quoteFor === 'from'
+      const ratePath =
+        request.quoteFor === 'from'
           ? `pairs/${safeFromCurrencyCode}/${safeToCurrencyCode}`
           : `pairs/${safeToCurrencyCode}/${safeFromCurrencyCode}`
 
-      const rate: Rate = await callApi(null, 'GET', rateUrl)
+      const rate: Rate = await get(ratePath)
 
       const nativeMin = await request.fromWallet.denominationToNative(
         rate.min,
@@ -231,17 +245,13 @@ export function makeSideShiftPlugin(
       const orderRequestParams: OrderRequestParams = {
         type: 'fixed',
         quoteId: fixedRateQuote.id,
-        affiliateId: 'whatever',
+        affiliateId: 'whatever', // TODO: should we hardcode it here or in the ENV.json?
         sessionSecret: 'this can be empty right?', // TODO: clarify with Andreas
         settleAddress
       }
 
-      const quoteInfo: OrderRequest = await callApi(
-        orderRequestParams,
-        'POST',
-        baseUrl
-      )
-      checkReplyforError(quoteInfo, request)
+      const quoteInfo: OrderRequest = await post('orders', orderRequestParams)
+
       const spendInfoAmount = await request.fromWallet.denominationToNative(
         quoteInfo.depositAmount,
         request.fromCurrencyCode.toUpperCase()
