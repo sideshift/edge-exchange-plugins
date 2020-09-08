@@ -219,6 +219,7 @@ export function makeSideShiftPlugin(
 
       const rate: Rate = await get(ratePath)
 
+      // TODO: not sure if this part is needed. If /quotes request throws an error if settleAmount is below min/ above max, it can be removed
       await checkRateForError(rate, request)
 
       const fixedRateQuoteParams: FixedQuoteRequestParams = {
