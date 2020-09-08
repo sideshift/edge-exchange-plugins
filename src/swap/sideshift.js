@@ -94,8 +94,11 @@ type Rate = {
   }
 }
 
+type Permission = {
+  createOrder: boolean
+}
+
 const dontUseLegacy = {
-  // TODO: clarify with Andreas
   DGB: true
 }
 
@@ -109,19 +112,11 @@ async function getAddress(
     : addressInfo.publicAddress
 }
 
-async function checkReply(uri: string, reply: EdgeFetchResponse) {
-  let replyJson
+async function checkReply(uri: string, reply: EdgeFetchResponse): Promise<any> {
   try {
-    replyJson = await reply.json()
+    await reply.json()
   } catch (e) {
     throw new Error(`SideShift.ai returned error code ${reply.status}`)
-  }
-  if (
-    reply.status === 403 &&
-    replyJson != null &&
-    /geo/.test(replyJson.error) // TODO: This could be used for transactions coming from restriced countries
-  ) {
-    throw new SwapPermissionError(swapInfo, 'geoRestriction')
   }
 }
 
@@ -129,31 +124,36 @@ export function makeSideShiftPlugin(
   opts: EdgeCorePluginOptions
 ): EdgeSwapPlugin {
   const { io } = opts
-  const { fetchCors = io.fetch } = io // TODO: use fetch or fetchCors?
+  const { fetch = io.fetch } = io
   const baseUrl = 'https://sideshift.ai/api/'
 
-  async function get(path: string): Promise<Rate> {
+  async function get(path: string): Promise<any> {
     const url = `${baseUrl}${path}`
-    const reply = await fetchCors(url)
+    const reply = await fetch(url)
     return reply
   }
 
   async function post(path, body): Promise<any> {
     const url = `${baseUrl}${path}`
-    const reply = await fetchCors(url, {
+    const reply = await fetch(url, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json' // TODO: need anything else here?
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(body)
     })
-
     return checkReply(url, reply)
   }
 
   const out: EdgeSwapPlugin = {
     swapInfo,
     async fetchSwapQuote(request: EdgeSwapRequest): Promise<EdgeSwapQuote> {
+      const permission: Permission = await get('permissions')
+
+      if (!permission.createOrder) {
+        throw new SwapPermissionError(swapInfo, 'geoRestriction')
+      }
+
       const [depositAddress, settleAddress] = await Promise.all([
         getAddress(request.fromWallet, request.fromCurrencyCode),
         getAddress(request.toWallet, request.toCurrencyCode)
@@ -227,7 +227,7 @@ export function makeSideShiftPlugin(
         type: 'fixed',
         quoteId: fixedRateQuote.id,
         affiliateId: 'whatever', // TODO: hardcode it in the .env.json
-        sessionSecret: 'this can be empty right?', // TODO: clarify with Andreas
+        sessionSecret: 'this can be empty right?',
         settleAddress
       }
 
@@ -260,12 +260,12 @@ export function makeSideShiftPlugin(
         networkFeeOption:
           request.fromCurrencyCode.toUpperCase() === 'BTC'
             ? 'high'
-            : 'standard', // TODO: figure out if this is specific to Edge, other plugins have the same
+            : 'standard',
         swapData: {
           orderId: quoteInfo.orderId,
           isEstimate: false,
-          payoutAddress: settleAddress, // TODO: this could be quoteInfo.settleAddress.address as well
-          payoutCurrencyCode: request.toCurrencyCode, // TODO: this could be quoteInfo.settleMethod as well
+          payoutAddress: settleAddress,
+          payoutCurrencyCode: request.toCurrencyCode,
           payoutNativeAmount: amountExpectedToNative,
           payoutWalletId: request.toWallet.id,
           plugin: { ...swapInfo },
