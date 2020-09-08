@@ -262,8 +262,7 @@ export function makeSideShiftPlugin(
         spendTargets: [
           {
             nativeAmount: spendInfoAmount,
-            publicAddress: quoteInfo.settleAddress.address,
-            uniqueIdentifier: quoteInfo.id || undefined // TODO: not sure if this is right or we need this
+            publicAddress: quoteInfo.settleAddress.address
           }
         ],
         networkFeeOption:
