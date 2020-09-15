@@ -45,7 +45,7 @@ const edgeCorePlugins = {
   foxExchange: makeFoxExchangePlugin,
   godex: makeGodexPlugin,
   shapeshift: makeShapeshiftPlugin,
-  sideshift: makeSideShiftPlugin,
+  sideShift: makeSideShiftPlugin,
   switchain: makeSwitchainPlugin,
   totle: makeTotlePlugin,
   transfer: makeTransferPlugin

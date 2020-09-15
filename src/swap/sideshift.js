@@ -6,10 +6,10 @@ import {
   SwapBelowLimitError,
   SwapPermissionError
 } from 'edge-core-js'
-import { EdgeFetchResponse } from 'edge-core-js/lib/types/types'
 import {
   type EdgeCorePluginOptions,
   type EdgeCurrencyWallet,
+  type EdgeFetchResponse,
   type EdgeSpendInfo,
   type EdgeSwapInfo,
   type EdgeSwapPlugin,
@@ -21,17 +21,14 @@ import {
 
 import { makeSwapPluginQuote } from '../swap-helpers.js'
 
-// const INVALID_CURRENCY_CODES = {} // TODO: anything to add here?
-
 // Invalid currency codes should *not* have transcribed codes
 // because currency codes with transcribed versions are NOT invalid
 const CURRENCY_CODE_TRANSCRIPTION = {
   // Edge currencyCode: exchangeCurrencyCode
-  // TODO: any other transcription neeeded?
   USDT: 'usdtErc20'
 }
 
-const pluginId = 'sideshift'
+const pluginId = 'sideShift'
 const swapInfo: EdgeSwapInfo = {
   pluginId,
   displayName: 'SideShift.ai',
@@ -95,12 +92,11 @@ type Rate = {
 }
 
 type Permission = {
-  createOrder: boolean
+  createOrder: boolean,
+  createQuote: boolean
 }
 
-const dontUseLegacy = {
-  DGB: true
-}
+const dontUseLegacy = {}
 
 async function getAddress(
   wallet: EdgeCurrencyWallet,
@@ -112,15 +108,15 @@ async function getAddress(
     : addressInfo.publicAddress
 }
 
-async function checkReplyForError(
-  uri: string,
-  reply: EdgeFetchResponse
-): Promise<any> {
+async function checkReplyForError(reply: EdgeFetchResponse): Promise<any> {
+  let replyJson
   try {
-    await reply.json()
+    replyJson = await reply.json()
   } catch (e) {
     throw new Error(`SideShift.ai returned error code ${reply.status}`)
   }
+
+  return replyJson
 }
 
 async function checkRateForError(
@@ -157,25 +153,24 @@ export function makeSideShiftPlugin(
   opts: EdgeCorePluginOptions
 ): EdgeSwapPlugin {
   const { io, initOptions } = opts
-  const { fetch = io.fetch } = io
-  const baseUrl = 'https://sideshift.ai/api/'
+  const baseUrl = 'https://sideshift.ai/api/v1/'
 
   async function get(path: string): Promise<any> {
     const url = `${baseUrl}${path}`
-    const reply = await fetch(url)
-    return reply
+    const reply = await io.fetch(url)
+    return checkReplyForError(reply)
   }
 
   async function post(path, body): Promise<any> {
     const url = `${baseUrl}${path}`
-    const reply = await fetch(url, {
+    const reply = await io.fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(body)
     })
-    return checkReplyForError(url, reply)
+    return checkReplyForError(reply)
   }
 
   const out: EdgeSwapPlugin = {
@@ -183,7 +178,10 @@ export function makeSideShiftPlugin(
     async fetchSwapQuote(request: EdgeSwapRequest): Promise<EdgeSwapQuote> {
       const permission: Permission = await get('permissions')
 
-      if (!permission.createOrder) {
+      if (
+        permission.createOrder === false ||
+        permission.createQuote === false
+      ) {
         throw new SwapPermissionError(swapInfo, 'geoRestriction')
       }
 
@@ -219,7 +217,7 @@ export function makeSideShiftPlugin(
 
       const rate: Rate = await get(ratePath)
 
-      // TODO: not sure if this part is needed. If /quotes request throws an error if settleAmount is below min/ above max, it can be removed
+      // TODO If /quotes request throws an error if settleAmount is below min/ above max, this part can be removed
       await checkRateForError(rate, request)
 
       const fixedRateQuoteParams: FixedQuoteRequestParams = {
@@ -236,8 +234,7 @@ export function makeSideShiftPlugin(
       const orderRequestParams: OrderRequestParams = {
         type: 'fixed',
         quoteId: fixedRateQuote.id,
-        affiliateId: initOptions.affiliateId, // TODO: hardcode it in the .env.json
-        sessionSecret: 'this can be empty right?',
+        affiliateId: initOptions.affiliateId,
         settleAddress
       }
 
@@ -289,7 +286,7 @@ export function makeSideShiftPlugin(
         amountExpectedToNative,
         tx,
         settleAddress,
-        'sideshift',
+        pluginId,
         false,
         quoteInfo.expiresAt,
         quoteInfo.id
