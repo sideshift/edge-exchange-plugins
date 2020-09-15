@@ -122,8 +122,7 @@ async function checkReplyForError(reply: EdgeFetchResponse): Promise<any> {
 async function checkRateForError(
   rate: Rate,
   request: EdgeSwapRequest,
-  depositAmount: string,
-  log
+  depositAmount: string
 ): Promise<any> {
   if (rate.error) {
     throw new SwapCurrencyError(
@@ -143,16 +142,11 @@ async function checkRateForError(
         .find(t => t.currencyCode === request.fromCurrencyCode)
         .denominations.find(d => d.name === request.fromCurrencyCode).multiplier
 
-  log('multiplier', multiplier)
-
   const nativeDepositAmount = mul(depositAmount, multiplier)
-
-  log('nativeDeposit', nativeDepositAmount)
 
   const amount =
     request.quoteFor === 'from' ? request.nativeAmount : nativeDepositAmount
 
-  log('amount', amount)
   const nativeMin = await request.fromWallet.denominationToNative(
     rate.min,
     request.fromCurrencyCode
@@ -175,7 +169,7 @@ async function checkRateForError(
 export function makeSideShiftPlugin(
   opts: EdgeCorePluginOptions
 ): EdgeSwapPlugin {
-  const { io, initOptions, log } = opts
+  const { io, initOptions } = opts
   const baseUrl = 'https://sideshift.ai/api/v1/'
 
   async function get(path: string): Promise<any> {
@@ -200,7 +194,6 @@ export function makeSideShiftPlugin(
     swapInfo,
     async fetchSwapQuote(request: EdgeSwapRequest): Promise<EdgeSwapQuote> {
       const permission: Permission = await get('permissions')
-      log('request', request)
       if (
         permission.createOrder === false ||
         permission.createQuote === false
@@ -238,16 +231,12 @@ export function makeSideShiftPlugin(
               request.toCurrencyCode
             )
 
-      log('quoteAmount', quoteAmount)
-
       const depositAmount =
         request.quoteFor === 'from'
           ? quoteAmount
           : (parseFloat(quoteAmount) / rate.rate).toFixed(8).toString()
 
-      log('depositAmount', depositAmount)
-
-      await checkRateForError(rate, request, depositAmount, log)
+      await checkRateForError(rate, request, depositAmount)
 
       const fixedRateQuoteParams: FixedQuoteRequestParams = {
         depositMethod: safeFromCurrencyCode,
