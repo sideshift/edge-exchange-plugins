@@ -28,7 +28,7 @@ const CURRENCY_CODE_TRANSCRIPTION = {
   USDT: 'usdtErc20'
 }
 
-const pluginId = 'sideShift'
+const pluginId = 'sideshift'
 const swapInfo: EdgeSwapInfo = {
   pluginId,
   displayName: 'SideShift.ai',
@@ -53,9 +53,9 @@ type FixedQuoteRequestParams = {
 
 type OrderRequest = {
   createdAt: string,
-  createdAtISO: Date,
+  createdAtISO: string,
   expiresAt: string,
-  expiresAtIso: Date,
+  expiresAtISO: string,
   depositAddress: {
     address: string
   },
@@ -109,14 +109,11 @@ async function getAddress(
 }
 
 async function checkReplyForError(reply: EdgeFetchResponse): Promise<any> {
-  let replyJson
   try {
-    replyJson = await reply.json()
+    return await reply.json()
   } catch (e) {
     throw new Error(`SideShift.ai returned error code ${reply.status}`)
   }
-
-  return replyJson
 }
 
 async function checkRateForError(
@@ -124,37 +121,30 @@ async function checkRateForError(
   request: EdgeSwapRequest,
   depositAmount: string
 ): Promise<any> {
+  const { fromCurrencyCode, toCurrencyCode, fromWallet, nativeAmount } = request
+  const { denominations, metaTokens } = fromWallet.currencyInfo
   if (rate.error) {
-    throw new SwapCurrencyError(
-      swapInfo,
-      request.fromCurrencyCode,
-      request.toCurrencyCode
-    )
+    throw new SwapCurrencyError(swapInfo, fromCurrencyCode, toCurrencyCode)
   }
-
-  const multiplier = request.fromWallet.currencyInfo.denominations.find(
-    d => d.name === request.fromCurrencyCode
-  )
-    ? request.fromWallet.currencyInfo.denominations.find(
-        d => d.name === request.fromCurrencyCode
-      ).multiplier
-    : request.fromWallet.currencyInfo.metaTokens
-        .find(t => t.currencyCode === request.fromCurrencyCode)
-        .denominations.find(d => d.name === request.fromCurrencyCode).multiplier
+  const multiplier = denominations.find(d => d.name === fromCurrencyCode)
+    ? denominations.find(d => d.name === fromCurrencyCode).multiplier
+    : metaTokens
+        .find(t => t.currencyCode === fromCurrencyCode)
+        .denominations.find(d => d.name === fromCurrencyCode).multiplier
 
   const nativeDepositAmount = mul(depositAmount, multiplier)
 
   const amount =
-    request.quoteFor === 'from' ? request.nativeAmount : nativeDepositAmount
+    request.quoteFor === 'from' ? nativeAmount : nativeDepositAmount
 
-  const nativeMin = await request.fromWallet.denominationToNative(
+  const nativeMin = await fromWallet.denominationToNative(
     rate.min,
-    request.fromCurrencyCode
+    fromCurrencyCode
   )
 
-  const nativeMax = await request.fromWallet.denominationToNative(
+  const nativeMax = await fromWallet.denominationToNative(
     rate.max,
-    request.fromCurrencyCode
+    fromCurrencyCode
   )
 
   if (lt(amount, nativeMin)) {
@@ -166,7 +156,7 @@ async function checkRateForError(
   }
 }
 
-export function makeSideShiftPlugin(
+export function makeSideshiftPlugin(
   opts: EdgeCorePluginOptions
 ): EdgeSwapPlugin {
   const { io, initOptions } = opts
@@ -298,6 +288,8 @@ export function makeSideShiftPlugin(
       }
       const tx: EdgeTransaction = await request.fromWallet.makeSpend(spendInfo)
 
+      const orderExpirationMs = 1000 * 60 * 5
+
       return makeSwapPluginQuote(
         request,
         amountExpectedFromNative,
@@ -306,7 +298,7 @@ export function makeSideShiftPlugin(
         settleAddress,
         pluginId,
         false,
-        quoteInfo.expiresAtIso,
+        new Date(Number(quoteInfo.expiresAt) + orderExpirationMs),
         quoteInfo.id
       )
     }
