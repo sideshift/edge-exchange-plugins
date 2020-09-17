@@ -289,6 +289,8 @@ export function makeSideshiftPlugin(
       const tx: EdgeTransaction = await request.fromWallet.makeSpend(spendInfo)
 
       const orderExpirationMs = 1000 * 60 * 5
+      const orderExpirationDate =
+        new Date(quoteInfo.expiresAtISO).getTime() + orderExpirationMs
 
       return makeSwapPluginQuote(
         request,
@@ -298,7 +300,7 @@ export function makeSideshiftPlugin(
         settleAddress,
         pluginId,
         false,
-        new Date(Number(quoteInfo.expiresAt) + orderExpirationMs),
+        new Date(orderExpirationDate),
         quoteInfo.id
       )
     }
