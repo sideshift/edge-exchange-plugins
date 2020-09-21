@@ -109,7 +109,7 @@ async function getAddress(
     : addressInfo.publicAddress
 }
 
-async function getSafeCurrencyCode(request: EdgeSwapRequest) {
+function getSafeCurrencyCode(request: EdgeSwapRequest) {
   const { fromCurrencyCode, toCurrencyCode } = request
   let safeFromCurrencyCode = fromCurrencyCode.toLowerCase()
   let safeToCurrencyCode = toCurrencyCode.toLowerCase()
@@ -120,14 +120,6 @@ async function getSafeCurrencyCode(request: EdgeSwapRequest) {
     safeToCurrencyCode = CURRENCY_CODE_TRANSCRIPTION[toCurrencyCode]
   }
   return { safeFromCurrencyCode, safeToCurrencyCode }
-}
-
-async function checkReplyForError(reply: EdgeFetchResponse): Promise<any> {
-  try {
-    return await reply.json()
-  } catch (e) {
-    throw new Error(`SideShift.ai returned error code ${reply.status}`)
-  }
 }
 
 async function checkQuoteError(
@@ -161,28 +153,31 @@ export function makeSideshiftPlugin(
 ): EdgeSwapPlugin {
   const { io, initOptions } = opts
 
-  async function get(path: string): Promise<any> {
+  async function createSideShiftApi(path: string, method: string, body = null) {
     const url = `${SIDESHIFT_BASE_URL}${path}`
-    const reply = await io.fetch(url)
-    return checkReplyForError(reply)
-  }
-
-  async function post(path, body): Promise<any> {
-    const url = `${SIDESHIFT_BASE_URL}${path}`
-    const reply = await io.fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body)
-    })
-    return checkReplyForError(reply)
+    const reply: EdgeFetchResponse = await (method === 'get'
+      ? io.fetch(url)
+      : io.fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body)
+        }))
+    try {
+      return await reply.json()
+    } catch (e) {
+      throw new Error(`SideShift.ai returned error code ${reply.status}`)
+    }
   }
 
   const out: EdgeSwapPlugin = {
     swapInfo,
     async fetchSwapQuote(request: EdgeSwapRequest): Promise<EdgeSwapQuote> {
-      const permission: Permission = await get('permissions')
+      const permission: Permission = await createSideShiftApi(
+        'permissions',
+        'get'
+      )
 
       if (
         permission.createOrder === false ||
@@ -201,8 +196,9 @@ export function makeSideshiftPlugin(
         safeToCurrencyCode
       } = await getSafeCurrencyCode(request)
 
-      const rate: Rate = await get(
-        `pairs/${safeFromCurrencyCode}/${safeToCurrencyCode}`
+      const rate: Rate = await createSideShiftApi(
+        `pairs/${safeFromCurrencyCode}/${safeToCurrencyCode}`,
+        'get'
       )
 
       if (rate.error) {
@@ -213,9 +209,6 @@ export function makeSideshiftPlugin(
         )
       }
 
-      opts.log('request', request)
-
-      // TODO: this could look better
       const quoteAmount = await (request.quoteFor === 'from'
         ? request.fromWallet.nativeToDenomination(
             request.nativeAmount,
@@ -237,8 +230,9 @@ export function makeSideshiftPlugin(
         depositAmount
       }
 
-      const fixedRateQuote: FixedQuote = await post(
+      const fixedRateQuote: FixedQuote = await createSideShiftApi(
         'quotes',
+        'post',
         fixedRateQuoteParams
       )
 
@@ -253,7 +247,11 @@ export function makeSideshiftPlugin(
         settleAddress
       }
 
-      const quoteInfo: OrderRequest = await post('orders', orderRequestParams)
+      const quoteInfo: OrderRequest = await createSideShiftApi(
+        'orders',
+        'post',
+        orderRequestParams
+      )
 
       const spendInfoAmount = await request.fromWallet.denominationToNative(
         quoteInfo.depositAmount,
