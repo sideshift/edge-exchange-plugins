@@ -153,7 +153,7 @@ export function makeSideshiftPlugin(
 ): EdgeSwapPlugin {
   const { io, initOptions } = opts
 
-  function createSideShiftApi(path: string) {
+  async function createSideShiftApi(path: string) {
     const url = SIDESHIFT_BASE_URL + path
 
     async function checkReply(reply: EdgeFetchResponse) {
@@ -165,10 +165,10 @@ export function makeSideshiftPlugin(
     }
 
     return {
-      get: () => checkReply(io.fetch(url)),
-      post: body =>
+      get: async () => checkReply(await io.fetchCors(url)),
+      post: async body =>
         checkReply(
-          io.fetch(url, {
+          await io.fetchCors(url, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
@@ -178,13 +178,12 @@ export function makeSideshiftPlugin(
         )
     }
   }
-
   const out: EdgeSwapPlugin = {
     swapInfo,
     async fetchSwapQuote(request: EdgeSwapRequest): Promise<EdgeSwapQuote> {
       const permission: Permission = await createSideShiftApi(
         'permissions'
-      ).get()
+      ).then(permission => permission.get())
 
       if (
         permission.createOrder === false ||
@@ -205,7 +204,7 @@ export function makeSideshiftPlugin(
 
       const rate: Rate = await createSideShiftApi(
         `pairs/${safeFromCurrencyCode}/${safeToCurrencyCode}`
-      ).get()
+      ).then(async rate => rate.get())
 
       if (rate.error) {
         throw new SwapCurrencyError(
@@ -236,9 +235,9 @@ export function makeSideshiftPlugin(
         depositAmount
       }
 
-      const fixedQuote: FixedQuote = await createSideShiftApi('quotes').post(
-        fixedQuoteRequest
-      )
+      const fixedQuote: FixedQuote = await createSideShiftApi(
+        'quotes'
+      ).then(async quote => quote.post(fixedQuoteRequest))
 
       if (fixedQuote.error) {
         await checkQuoteError(rate, request, fixedQuote.error.message)
@@ -251,7 +250,9 @@ export function makeSideshiftPlugin(
         settleAddress
       }
 
-      const order: Order = await createSideShiftApi('orders').post(orderRequest)
+      const order: Order = await createSideShiftApi(
+        'orders'
+      ).then(async order => order.post(orderRequest))
 
       const spendInfoAmount = await request.fromWallet.denominationToNative(
         order.depositAmount,
