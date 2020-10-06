@@ -46,13 +46,13 @@ type FixedQuote = {
   error?: { message: string }
 }
 
-type FixedQuoteRequestParams = {
+type FixedQuoteRequest = {
   depositMethod: string,
   settleMethod: string,
   depositAmount: string
 }
 
-type OrderRequest = {
+type Order = {
   createdAt: string,
   createdAtISO: string,
   expiresAt: string,
@@ -75,7 +75,7 @@ type OrderRequest = {
   deposits: Array<any>
 }
 
-type OrderRequestParams = {
+type OrderRequest = {
   type: string,
   quoteId: string,
   affiliateId: string,
@@ -153,21 +153,29 @@ export function makeSideshiftPlugin(
 ): EdgeSwapPlugin {
   const { io, initOptions } = opts
 
-  async function createSideShiftApi(path: string, method: string, body = null) {
-    const url = `${SIDESHIFT_BASE_URL}${path}`
-    const reply: EdgeFetchResponse = await (method === 'get'
-      ? io.fetch(url)
-      : io.fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(body)
-        }))
-    try {
-      return await reply.json()
-    } catch (e) {
-      throw new Error(`SideShift.ai returned error code ${reply.status}`)
+  function createSideShiftApi(path: string) {
+    const url = SIDESHIFT_BASE_URL + path
+
+    async function checkReply(reply: EdgeFetchResponse) {
+      try {
+        return await reply.json()
+      } catch (e) {
+        throw new Error(`SideShift.ai returned error code ${reply.status}`)
+      }
+    }
+
+    return {
+      get: () => checkReply(io.fetch(url)),
+      post: body =>
+        checkReply(
+          io.fetch(url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body)
+          })
+        )
     }
   }
 
@@ -175,9 +183,8 @@ export function makeSideshiftPlugin(
     swapInfo,
     async fetchSwapQuote(request: EdgeSwapRequest): Promise<EdgeSwapQuote> {
       const permission: Permission = await createSideShiftApi(
-        'permissions',
-        'get'
-      )
+        'permissions'
+      ).get()
 
       if (
         permission.createOrder === false ||
@@ -197,9 +204,8 @@ export function makeSideshiftPlugin(
       } = await getSafeCurrencyCode(request)
 
       const rate: Rate = await createSideShiftApi(
-        `pairs/${safeFromCurrencyCode}/${safeToCurrencyCode}`,
-        'get'
-      )
+        `pairs/${safeFromCurrencyCode}/${safeToCurrencyCode}`
+      ).get()
 
       if (rate.error) {
         throw new SwapCurrencyError(
@@ -224,47 +230,41 @@ export function makeSideshiftPlugin(
           ? quoteAmount
           : (parseFloat(quoteAmount) / rate.rate).toFixed(8).toString()
 
-      const fixedRateQuoteParams: FixedQuoteRequestParams = {
+      const fixedQuoteRequest: FixedQuoteRequest = {
         depositMethod: safeFromCurrencyCode,
         settleMethod: safeToCurrencyCode,
         depositAmount
       }
 
-      const fixedRateQuote: FixedQuote = await createSideShiftApi(
-        'quotes',
-        'post',
-        fixedRateQuoteParams
+      const fixedQuote: FixedQuote = await createSideShiftApi('quotes').post(
+        fixedQuoteRequest
       )
 
-      if (fixedRateQuote.error) {
-        await checkQuoteError(rate, request, fixedRateQuote.error.message)
+      if (fixedQuote.error) {
+        await checkQuoteError(rate, request, fixedQuote.error.message)
       }
 
-      const orderRequestParams: OrderRequestParams = {
+      const orderRequest: OrderRequest = {
         type: 'fixed',
-        quoteId: fixedRateQuote.id,
+        quoteId: fixedQuote.id,
         affiliateId: initOptions.affiliateId,
         settleAddress
       }
 
-      const quoteInfo: OrderRequest = await createSideShiftApi(
-        'orders',
-        'post',
-        orderRequestParams
-      )
+      const order: Order = await createSideShiftApi('orders').post(orderRequest)
 
       const spendInfoAmount = await request.fromWallet.denominationToNative(
-        quoteInfo.depositAmount,
+        order.depositAmount,
         request.fromCurrencyCode.toUpperCase()
       )
 
       const amountExpectedFromNative = await request.fromWallet.denominationToNative(
-        quoteInfo.depositAmount,
+        order.depositAmount,
         request.fromCurrencyCode
       )
 
       const amountExpectedToNative = await request.fromWallet.denominationToNative(
-        quoteInfo.settleAmount,
+        order.settleAmount,
         request.toCurrencyCode
       )
 
@@ -273,7 +273,7 @@ export function makeSideshiftPlugin(
         spendTargets: [
           {
             nativeAmount: spendInfoAmount,
-            publicAddress: quoteInfo.depositAddress.address
+            publicAddress: order.depositAddress.address
           }
         ],
         networkFeeOption:
@@ -281,7 +281,7 @@ export function makeSideshiftPlugin(
             ? 'high'
             : 'standard',
         swapData: {
-          orderId: quoteInfo.orderId,
+          orderId: order.orderId,
           isEstimate: false,
           payoutAddress: settleAddress,
           payoutCurrencyCode: safeToCurrencyCode,
@@ -301,8 +301,8 @@ export function makeSideshiftPlugin(
         settleAddress,
         pluginId,
         false,
-        new Date(quoteInfo.expiresAtISO),
-        quoteInfo.id
+        new Date(order.expiresAtISO),
+        order.id
       )
     }
   }
